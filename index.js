@@ -24,19 +24,29 @@ async function getBBProperty(propName) {
     }
 }
 
-// Helper: BotsBusiness User Points Read (Reads synced property)
+// Helper: BotsBusiness Real Points Fetcher
 async function getBBUserBalance(telegramId) {
     try {
-        // ১. বটের সিঙ্ক করা প্রপার্টি থেকে পয়েন্ট পড়া (user_balance_TGID)
-        let propVal = await getBBProperty("user_balance_" + telegramId);
-        if (propVal !== null && propVal !== undefined) {
+        // ১. সরাসরি BotsBusiness-এর সব রিসোর্স থেকে 'balance' খোঁজা
+        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
+        const res = await axios.get(url, { timeout: 8000 });
+        
+        if (res.data && Array.isArray(res.data)) {
+            const balRes = res.data.find(r => r.name === "balance" || r.name === "points");
+            if (balRes && balRes.value !== undefined) {
+                return parseFloat(balRes.value || 0);
+            }
+        } else if (res.data && res.data.value !== undefined) {
+            return parseFloat(res.data.value || 0);
+        }
+
+        // ২. প্রপার্টি থেকে ফলব্যাক চেক
+        const propVal = await getBBProperty("user_balance_" + telegramId);
+        if (propVal !== null && propVal !== undefined && propVal !== "") {
             return parseFloat(propVal || 0);
         }
 
-        // ২. ফলব্যাক: 'balance' রিসোর্স থেকে ভ্যালু নেওয়ার চেষ্টা
-        let url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
-        let res = await axios.get(url, { timeout: 8000 });
-        return res.data ? parseFloat(res.data.value || 0) : 0;
+        return 0;
     } catch (e) {
         return 0;
     }
@@ -121,7 +131,7 @@ app.all('/api/v2', async (req, res) => {
 
             const currentPoints = await getBBUserBalance(ownerTelegramID);
 
-            // সার্ভিস রেট (ডিফল্ট ১৫০০ পয়েন্ট প্রতি ১০০০ কোয়ান্টিটিতে)
+            // সার্ভিস রেট
             const rawConfigs = await getBBProperty("service_configs");
             let rateInPoints = 1500; 
             if (rawConfigs) {
@@ -145,7 +155,7 @@ app.all('/api/v2', async (req, res) => {
                 return res.json({ error: "Failed to deduct points from bot account" });
             }
 
-            // SMMGen এ আসল অর্ডার দেওয়া
+            // SMMGen এ অর্ডার প্লেস করা
             const providerRes = await callUpstreamApi('add', {
                 service: serviceId,
                 link: link,
@@ -155,7 +165,7 @@ app.all('/api/v2', async (req, res) => {
             if (providerRes && providerRes.order) {
                 return res.json({ order: providerRes.order });
             } else {
-                // ফেল করলে রিফান্ড
+                // ফেল করলে পয়েন্ট রিফান্ড
                 await deductBBUserPoints(ownerTelegramID, -totalPointsCost);
                 return res.json({ error: providerRes?.error || "Failed to place order on SMMGen" });
             }
