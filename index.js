@@ -35,16 +35,16 @@ async function setBBProperty(propName, value) {
     }
 }
 
-// Helper: Auto-Fetch Any User Live Balance
+// Helper: Get User Live Balance (With Multi-level Fallback)
 async function getBBUserBalance(telegramId) {
     try {
-        // ১. প্রপার্টি থেকে রিড করা
+        // ১. প্রপার্টি থেকে রিড করা (সবচেয়ে নির্ভরযোগ্য)
         let propVal = await getBBProperty("user_balance_" + telegramId);
         if (propVal !== null && propVal !== undefined && propVal !== "") {
             return parseFloat(propVal || 0);
         }
 
-        // ২. রিসোর্স API থেকে সরাসরি রিড করা
+        // ২. রিসোর্স API থেকে ট্রাই করা
         let url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
         let res = await axios.get(url, { timeout: 8000 });
         if (res.data && res.data.value !== undefined && res.data.value !== null) {
@@ -135,7 +135,7 @@ async function getDynamicServiceRate(serviceId) {
         }
     } catch (e) {}
 
-    return 100; // ডিফল্ট ১০০ পয়েন্ট ব্যাকআপ
+    return 100; // ডিফল্ট ব্যাকআপ রেট
 }
 
 // Helper: Upstream Provider SMMGen Call
@@ -170,7 +170,7 @@ app.all('/api/v2', async (req, res) => {
             return res.json({ error: "Invalid API key or Action missing" });
         }
 
-        // 🔑 1. Validate API Key & Extract Owner Telegram ID
+        // 🔑 1. Extract Owner Telegram ID from Key
         let ownerTelegramID = await getBBProperty("apikey_owner_" + apiKey);
 
         if (!ownerTelegramID && apiKey.startsWith("CSB_")) {
@@ -213,7 +213,7 @@ app.all('/api/v2', async (req, res) => {
                 return res.json({ error: "Not enough balance (Points)" });
             }
 
-            // SMMGen প্রোভাইডারে অর্ডার সাবমিট
+            // প্রোভাইডারে অর্ডার সেন্ড
             const providerRes = await callUpstreamApi('add', {
                 service: serviceId,
                 link: link,
