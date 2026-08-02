@@ -10,7 +10,7 @@ app.all('/api/v2', async (req, res) => {
     
     const apiKey = params.key;
     const action = params.action;
-    const rawService = params.service;
+    const rawService = params.service; // উদাহরণ: "CSBSMM-12409"
     const link = params.link;
     const quantity = parseInt(params.quantity);
 
@@ -24,7 +24,12 @@ app.all('/api/v2', async (req, res) => {
             return res.json({ status: "error", message: "Missing required parameters (service, link, quantity)" });
         }
 
+        // 🧹 CSBSMM- এবং যেকোনো অ-সংখ্যানুক্রমিক ক্যারেক্টার অটো ফিল্টার করে শুধু সংখ্যা নেওয়া (যেমন: "12409")
         const cleanedServiceId = rawService.toString().replace(/\D/g, "");
+
+        if (!cleanedServiceId) {
+            return res.json({ status: "error", message: "Invalid Service ID format" });
+        }
 
         try {
             // 💰 ২. BotsBusiness থেকে API Key ভ্যালিডেশন ও ব্যালেন্স ডিডাকশন
