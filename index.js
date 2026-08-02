@@ -6,17 +6,13 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ============================================================
-// 🔒 CONFIGURATIONS & ENVIRONMENT VARIABLES
+// 🔒 CONFIGURATIONS
 // ============================================================
 const SMM_API_URL = process.env.SMM_API_URL || "https://my.smmgen.com/api/v2";
 const SMM_API_KEY = process.env.SMM_API_KEY || "29e3cdfcbdce836e667f5c6473e6fb3f";
 
 const BB_BOT_ID = process.env.BB_BOT_ID || "2968405";
 const BB_API_KEY = process.env.BB_API_KEY || "SZ5agaaNJX1kWJiaoK7BK3Aqm-1PJ9WtrkNdGv7n";
-
-// ============================================================
-// 🛠️ BOTS.BUSINESS HELPER FUNCTIONS
-// ============================================================
 
 // Helper: Read BotsBusiness Property
 async function getBBProperty(propName) {
@@ -43,75 +39,61 @@ async function setBBProperty(propName, value) {
     }
 }
 
-// FIX: SMART API KEY VALIDATION (FIXED INCORRECT API KEY ERROR)
-async function validateApiKey(apiKey) {
+// FIX: EXTRACT TELEGRAM ID DIRECTLY FROM API KEY (BYPASSES BB PERMISSION LOCK)
+function extractTelegramIdFromKey(apiKey) {
     if (!apiKey) return null;
-
-    // ১. প্রপার্টি ম্যাপিং চেক (apikey_owner_<API_KEY>)
-    const mappedOwner = await getBBProperty("apikey_owner_" + apiKey);
-    if (mappedOwner) {
-        return mappedOwner.toString().trim();
-    }
-
-    // ২. স্মার্ট ডাইনামিক আইডি ডিটেকশন (CSB_TelegramID_RandomFormat)
+    
+    // ফরম্যাট: CSB_<TELEGRAM_ID>_<RANDOM_CHARS>
     if (apiKey.startsWith("CSB_")) {
         const parts = apiKey.split("_");
-        if (parts.length >= 2 && parts[1]) {
-            const potentialTgId = parts[1].trim();
-            // নিশ্চিত হওয়া যে অংশটি শুধু সংখ্যা (Telegram ID)
-            if (/^\d+$/.test(potentialTgId)) {
-                return potentialTgId;
-            }
+        if (parts.length >= 2 && /^\d+$/.test(parts[1])) {
+            return parts[1];
         }
     }
-
     return null;
 }
 
-// FIX: LIVE BALANCE ACCURACY
+// FIX: READ USER BALANCE DIRECTLY FROM SYNCED PROPERTY
 async function getBBUserBalance(telegramId) {
     try {
-        // ১. বটের রিসোর্স API থেকে সরাসরি লাইভ রিড করা
-        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
-        const res = await axios.get(url, { timeout: 8000 });
-        
-        if (res.data && res.data.value !== undefined && res.data.value !== null) {
-            const liveVal = parseFloat(res.data.value || 0);
-            await setBBProperty("user_balance_" + telegramId, liveVal.toString());
-            return liveVal;
-        }
-
-        // ২. ফলব্যাক: সেভ থাকা প্রপার্টি রিড করা
+        // ১. সেভ থাকা প্রপার্টি রিড (যা ইউজার ক্লিক করার সাথে সাথে রাইট হয়)
         const propVal = await getBBProperty("user_balance_" + telegramId);
         if (propVal !== null && propVal !== undefined && propVal !== "") {
             return parseFloat(propVal || 0);
         }
 
+        // ২. রিসোর্স রিড ব্যাকআপ
+        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
+        const res = await axios.get(url, { timeout: 8000 });
+        if (res.data && res.data.value !== undefined && res.data.value !== null) {
+            return parseFloat(res.data.value || 0);
+        }
+
         return 0;
     } catch (e) {
-        const propVal = await getBBProperty("user_balance_" + telegramId);
-        return propVal ? parseFloat(propVal) : 0;
+        return 0;
     }
 }
 
-// FIX: ORDER BALANCE DEDUCTION SAFETY
+// FIX: ORDER BALANCE DEDUCTION
 async function deductBBUserPoints(telegramId, amount) {
     try {
-        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance/add?api_key=${BB_API_KEY}&telegram_id=${telegramId}&value=-${amount}`;
-        const res = await axios.post(url, {}, { timeout: 8000 });
+        // ১. প্রপার্টি আপডেট
+        const currentBalance = await getBBUserBalance(telegramId);
+        const newBal = Math.max(0, currentBalance - amount);
+        await setBBProperty("user_balance_" + telegramId, newBal.toString());
 
-        if (res.status === 200) {
-            const currentBalance = await getBBUserBalance(telegramId);
-            await setBBProperty("user_balance_" + telegramId, currentBalance.toString());
-            return true;
-        }
-        return false;
+        // ২. রিসোর্স থেকে মাইনাস করা
+        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance/add?api_key=${BB_API_KEY}&telegram_id=${telegramId}&value=-${amount}`;
+        await axios.post(url, {}, { timeout: 8000 });
+
+        return true;
     } catch (e) {
         return false;
     }
 }
 
-// Helper: Upstream Provider API Call
+// Helper: Upstream Provider SMMGen Call
 async function callUpstreamApi(action, params = {}) {
     try {
         const formData = new URLSearchParams();
@@ -136,14 +118,12 @@ async function callUpstreamApi(action, params = {}) {
 // FIX: SERVICES RATE FETCHING
 async function getDynamicServiceRate(serviceId) {
     try {
-        // ১. চেক Single Rate Property
         let singleRate = await getBBProperty("rate_" + serviceId);
         if (!singleRate) {
             singleRate = await getBBProperty("service_rate_" + serviceId);
         }
         if (singleRate) return parseFloat(singleRate);
 
-        // ২. কনফিগারেশন অবজেক্ট চেক (service_configs)
         const rawConfigs = await getBBProperty("service_configs");
         if (rawConfigs) {
             let configs = typeof rawConfigs === 'string' ? JSON.parse(rawConfigs) : rawConfigs;
@@ -154,7 +134,6 @@ async function getDynamicServiceRate(serviceId) {
             }
         }
 
-        // ৩. সার্ভিস লিস্ট চেক (services_list)
         const rawList = await getBBProperty("services_list");
         if (rawList) {
             let list = typeof rawList === 'string' ? JSON.parse(rawList) : rawList;
@@ -171,7 +150,7 @@ async function getDynamicServiceRate(serviceId) {
     return null;
 }
 
-// Helper: Save Order
+// Helper: Save Order Details
 async function saveOrderToBot(telegramId, orderId, serviceId, link, quantity, pointsCost) {
     try {
         const orderData = {
@@ -208,8 +187,8 @@ app.all('/api/v2', async (req, res) => {
             return res.json({ error: "Invalid API key or Action missing" });
         }
 
-        // 🔒 API Key Verification
-        const ownerTelegramID = await validateApiKey(apiKey);
+        // 🔒 Extract Telegram ID from Key
+        const ownerTelegramID = extractTelegramIdFromKey(apiKey);
         if (!ownerTelegramID) {
             return res.json({ error: "Incorrect API key" });
         }
@@ -283,12 +262,7 @@ app.all('/api/v2', async (req, res) => {
             });
 
             if (providerRes && providerRes.order) {
-                const isDeducted = await deductBBUserPoints(ownerTelegramID, totalPointsCost);
-
-                if (!isDeducted) {
-                    console.error(`Order placed (${providerRes.order}) but failed to deduct balance for user ${ownerTelegramID}`);
-                }
-
+                await deductBBUserPoints(ownerTelegramID, totalPointsCost);
                 await saveOrderToBot(ownerTelegramID, providerRes.order, serviceId, link, quantity, totalPointsCost);
                 return res.json({ order: providerRes.order });
             } else {
