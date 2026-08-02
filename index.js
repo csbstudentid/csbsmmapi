@@ -39,11 +39,11 @@ async function setBBProperty(propName, value) {
     }
 }
 
-// FIX: EXTRACT TELEGRAM ID DIRECTLY FROM API KEY (BYPASSES BB PERMISSION LOCK)
+// FIX: EXTRACT TELEGRAM ID DIRECTLY FROM API KEY
 function extractTelegramIdFromKey(apiKey) {
     if (!apiKey) return null;
     
-    // ফরম্যাট: CSB_<TELEGRAM_ID>_<RANDOM_CHARS>
+    // Format: CSB_<TELEGRAM_ID>_<RANDOM_CHARS>
     if (apiKey.startsWith("CSB_")) {
         const parts = apiKey.split("_");
         if (parts.length >= 2 && /^\d+$/.test(parts[1])) {
@@ -53,37 +53,38 @@ function extractTelegramIdFromKey(apiKey) {
     return null;
 }
 
-// FIX: READ USER BALANCE DIRECTLY FROM SYNCED PROPERTY
+// FIX: FETCH REAL LIVE BALANCE DIRECTLY FROM BOTS.BUSINESS
 async function getBBUserBalance(telegramId) {
     try {
-        // ১. সেভ থাকা প্রপার্টি রিড (যা ইউজার ক্লিক করার সাথে সাথে রাইট হয়)
+        // 1. First Priority: Check property saved by Bot
         const propVal = await getBBProperty("user_balance_" + telegramId);
         if (propVal !== null && propVal !== undefined && propVal !== "") {
             return parseFloat(propVal || 0);
         }
 
-        // ২. রিসোর্স রিড ব্যাকআপ
-        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
-        const res = await axios.get(url, { timeout: 8000 });
-        if (res.data && res.data.value !== undefined && res.data.value !== null) {
-            return parseFloat(res.data.value || 0);
+        // 2. Second Priority: Read from user_info or resources
+        const res = await axios.get(`https://api.bots.business/v1/bots/${BB_BOT_ID}/resources?api_key=${BB_API_KEY}&telegram_id=${telegramId}`, { timeout: 8000 });
+        if (res.data && Array.isArray(res.data)) {
+            const balRes = res.data.find(r => r.name === "balance");
+            if (balRes && balRes.value !== undefined) {
+                return parseFloat(balRes.value || 0);
+            }
         }
 
         return 0;
     } catch (e) {
-        return 0;
+        const propVal = await getBBProperty("user_balance_" + telegramId);
+        return propVal ? parseFloat(propVal) : 0;
     }
 }
 
 // FIX: ORDER BALANCE DEDUCTION
 async function deductBBUserPoints(telegramId, amount) {
     try {
-        // ১. প্রপার্টি আপডেট
         const currentBalance = await getBBUserBalance(telegramId);
         const newBal = Math.max(0, currentBalance - amount);
         await setBBProperty("user_balance_" + telegramId, newBal.toString());
 
-        // ২. রিসোর্স থেকে মাইনাস করা
         const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance/add?api_key=${BB_API_KEY}&telegram_id=${telegramId}&value=-${amount}`;
         await axios.post(url, {}, { timeout: 8000 });
 
