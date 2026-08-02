@@ -57,20 +57,17 @@ app.all('/api/v2', async (req, res) => {
                 return res.json(checkData); // ব্যালেন্স কম বা ভুল API Key থাকলে রিটার্ন করবে
             }
 
-            // ২. SMMGen-এ POST রিকোয়েস্ট পাঠানো (404 Error ফিক্স)
+            // ২. SMMGen-এ অর্ডার পাঠানো
             const providerApiKey = "2e53b57414dc722db3e2e2f9aaf723dc";
-            const providerUrl = "https://my.smmgen.com/api/v2";
+            const providerUrl = `https://my.smmgen.com/api/v2?key=${providerApiKey}&action=add&service=${cleanedServiceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
 
-            const providerRes = await axios.post(providerUrl, new URLSearchParams({
-                key: providerApiKey,
-                action: 'add',
-                service: cleanedServiceId,
-                link: link,
-                quantity: quantity
-            }).toString(), {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            });
+            const providerRes = await axios.get(providerUrl);
             
+            // SMMGen থেকে কোনো এরর আসলে তা হ্যান্ডেল করা
+            if (providerRes.data.error) {
+                return res.json({ status: "error", message: "Provider Error: " + providerRes.data.error });
+            }
+
             return res.json({
                 status: "success",
                 order: providerRes.data.order || checkData.order_id,
@@ -79,10 +76,7 @@ app.all('/api/v2', async (req, res) => {
             });
 
         } catch (error) {
-            return res.json({ 
-                status: "error", 
-                message: "Provider Error: " + (error.response ? JSON.stringify(error.response.data) : error.message) 
-            });
+            return res.json({ status: "error", message: "Transaction failed: " + error.message });
         }
     }
 
