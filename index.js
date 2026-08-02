@@ -25,7 +25,7 @@ async function getBBProperty(propName) {
 }
 
 // Helper: BotsBusiness User Balance (Points) Read
-async function getBBUserPoints(telegramId) {
+async function getBBUserBalance(telegramId) {
     try {
         const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
         const res = await axios.get(url, { timeout: 8000 });
@@ -96,7 +96,6 @@ app.all('/api/v2', async (req, res) => {
         if (action === "balance") {
             const userPoints = await getBBUserBalance(ownerTelegramID);
             
-            // ➡️ ১৫০০ পয়েন্ট = ৭০ টাকা (ডিফল্ট পয়েন্ট হিসাব বা সরাসরি পয়েন্ট প্রদর্শন)
             return res.json({
                 balance: userPoints.toFixed(2),
                 currency: "Points"
@@ -115,7 +114,7 @@ app.all('/api/v2', async (req, res) => {
             }
 
             // (ক) ইউজারের পয়েন্ট ব্যালেন্স চেক
-            const currentPoints = await getBBUserPoints(ownerTelegramID);
+            const currentPoints = await getBBUserBalance(ownerTelegramID);
             
             // (খ) সার্ভিস প্রাইস (পয়েন্টে হিসাব)
             const rawConfigs = await getBBProperty("service_configs");
