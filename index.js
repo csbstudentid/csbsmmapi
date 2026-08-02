@@ -5,13 +5,13 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ================= CONFIGURATIONS =================
+// ================= FIXED CONFIGURATIONS =================
 const SMM_API_URL = "https://my.smmgen.com/api/v2";
 const SMM_API_KEY = "29e3cdfcbdce836e667f5c6473e6fb3f";
 
 const BB_BOT_ID = "2968405";
 const BB_API_KEY = "SZ5agaaNJX1kWJiaoK7BK3Aqm-1PJ9WtrkNdGv7n"; 
-// ===================================================
+// ========================================================
 
 // Helper: BotsBusiness Property Read
 async function getBBProperty(propName) {
@@ -24,11 +24,18 @@ async function getBBProperty(propName) {
     }
 }
 
-// Helper: BotsBusiness User Balance (Points) Read
+// Helper: BotsBusiness User Points Read (Reads synced property)
 async function getBBUserBalance(telegramId) {
     try {
-        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
-        const res = await axios.get(url, { timeout: 8000 });
+        // ১. বটের সিঙ্ক করা প্রপার্টি থেকে পয়েন্ট পড়া (user_balance_TGID)
+        let propVal = await getBBProperty("user_balance_" + telegramId);
+        if (propVal !== null && propVal !== undefined) {
+            return parseFloat(propVal || 0);
+        }
+
+        // ২. ফলব্যাক: 'balance' রিসোর্স থেকে ভ্যালু নেওয়ার চেষ্টা
+        let url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources/balance?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
+        let res = await axios.get(url, { timeout: 8000 });
         return res.data ? parseFloat(res.data.value || 0) : 0;
     } catch (e) {
         return 0;
@@ -95,7 +102,6 @@ app.all('/api/v2', async (req, res) => {
         // 💰 2. ACTION: BALANCE
         if (action === "balance") {
             const userPoints = await getBBUserBalance(ownerTelegramID);
-            
             return res.json({
                 balance: userPoints.toFixed(2),
                 currency: "Points"
@@ -113,12 +119,11 @@ app.all('/api/v2', async (req, res) => {
                 return res.json({ error: "Invalid parameters" });
             }
 
-            // (ক) ইউজারের পয়েন্ট ব্যালেন্স চেক
             const currentPoints = await getBBUserBalance(ownerTelegramID);
-            
-            // (খ) সার্ভিস প্রাইস (পয়েন্টে হিসাব)
+
+            // সার্ভিস রেট (ডিফল্ট ১৫০০ পয়েন্ট প্রতি ১০০০ কোয়ান্টিটিতে)
             const rawConfigs = await getBBProperty("service_configs");
-            let rateInPoints = 1500; // ডিফল্ট ১০০০ কোয়ান্টিটিতে ১৫০০ পয়েন্ট
+            let rateInPoints = 1500; 
             if (rawConfigs) {
                 try {
                     const configs = typeof rawConfigs === 'string' ? JSON.parse(rawConfigs) : rawConfigs;
@@ -134,13 +139,13 @@ app.all('/api/v2', async (req, res) => {
                 return res.json({ error: "Not enough balance (Points)" });
             }
 
-            // (গ) পয়েন্ট কেটে নেওয়া
+            // পয়েন্ট কেটে নেওয়া
             const deducted = await deductBBUserPoints(ownerTelegramID, totalPointsCost);
             if (!deducted) {
                 return res.json({ error: "Failed to deduct points from bot account" });
             }
 
-            // (ঘ) SMMGen-এ অর্ডার প্লেস করা
+            // SMMGen এ আসল অর্ডার দেওয়া
             const providerRes = await callUpstreamApi('add', {
                 service: serviceId,
                 link: link,
@@ -150,7 +155,7 @@ app.all('/api/v2', async (req, res) => {
             if (providerRes && providerRes.order) {
                 return res.json({ order: providerRes.order });
             } else {
-                // অর্ডার ফেল করলে পয়েন্ট ফেরত
+                // ফেল করলে রিফান্ড
                 await deductBBUserPoints(ownerTelegramID, -totalPointsCost);
                 return res.json({ error: providerRes?.error || "Failed to place order on SMMGen" });
             }
