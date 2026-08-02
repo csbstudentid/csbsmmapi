@@ -5,12 +5,12 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Global Configs
 const SMM_API_URL = "https://my.smmgen.com/api/v2";
 const SMM_API_KEY = "2e53b57414dc722db3e2e2f9aaf723dc";
-const BOT_ID = "2968405";
 
-// Helper: Upstream Provider Call (Form Data POST - 404 Fixed)
+// 🔗 আপনার সুনির্দিষ্ট BotsBusiness Webhook URL
+const BOT_WEBHOOK_URL = "https://api.bots.business/v1/bots/2968405/new-webhook?command=%2Fon_api_request&public_user_token=6f943e36950e8fe78a3dff7524d9e521";
+
 async function callUpstreamApi(action, params = {}) {
     try {
         const formData = new URLSearchParams();
@@ -31,79 +31,57 @@ async function callUpstreamApi(action, params = {}) {
 
         return res.data || { error: "Empty response from provider" };
     } catch (err) {
-        if (err.response) {
-            return { error: `Provider Error (${err.response.status}): ${JSON.stringify(err.response.data)}` };
-        }
-        return { error: "Provider Connection Failed: " + err.message };
+        return { error: err.response?.data?.error || err.message };
     }
 }
 
 app.all('/api/v2', async (req, res) => {
     try {
         const request = req.method === 'POST' ? (req.body || {}) : (req.query || {});
-
         const apiKey = (request.key || '').toString().trim();
         const action = (request.action || '').toString().trim();
 
         if (!apiKey || !action) {
-            return res.json({ status: "error", message: "Invalid API key or Action missing" });
+            return res.json({ error: "Invalid API key or Action missing" });
         }
 
-        // 💰 1. CHECK BALANCE
+        // 💰 ১. ব্যালেন্স চেক (action=balance)
         if (action === "balance") {
             try {
-                const checkUrl = `https://api.bots.business/v1/bots/${BOT_ID}/web_app?command=check_and_deduct&key=${encodeURIComponent(apiKey)}&action=balance`;
-                const checkRes = await axios.get(checkUrl, { timeout: 8000 });
-                const data = checkRes.data;
-
-                if (data && data.status === "success") {
+                const checkRes = await axios.get(`${BOT_WEBHOOK_URL}&key=${encodeURIComponent(apiKey)}&action=balance`);
+                if (checkRes.data && checkRes.data.status === "success") {
                     return res.json({
-                        status: "success",
-                        balance: parseFloat(data.balance || 0).toFixed(2),
+                        balance: checkRes.data.balance,
                         currency: "USD"
                     });
                 } else {
-                    return res.json({ status: "error", message: data?.message || "Incorrect API key" });
+                    return res.json({ error: checkRes.data?.message || "Incorrect API key" });
                 }
             } catch (err) {
-                return res.json({ status: "error", message: "Failed to fetch balance from bot" });
+                return res.json({ error: "Failed to connect to Bot Webhook" });
             }
         }
 
-        // 📦 2. SERVICES LIST
-        if (action === "services") {
-            const upstreamServices = await callUpstreamApi('services');
-            return res.json(upstreamServices);
-        }
-
-        // 🛒 3. ADD NEW ORDER
+        // 🛒 ২. নতুন অর্ডার প্রসেস (action=add)
         if (action === "add") {
             const rawService = (request.service || '').toString().trim();
             const link = (request.link || '').toString().trim();
             const quantity = parseInt(request.quantity || 0, 10);
-
-            // CSBSMM- টেক্সট ফিল্টার করে বিশুদ্ধ সার্ভিস আইডি (যেমন: 12409) বের করা
             const serviceId = rawService.replace(/\D/g, "");
 
             if (!serviceId || !link || isNaN(quantity) || quantity <= 0) {
-                return res.json({ status: "error", message: "Invalid parameters (check service, link, or quantity)" });
+                return res.json({ error: "Invalid parameters" });
             }
 
             try {
-                // ১. BotsBusiness থেকে পয়েন্ট ও কি ভ্যালিডেশন
-                const checkUrl = `https://api.bots.business/v1/bots/${BOT_ID}/web_app?command=check_and_deduct`
-                              + `&key=${encodeURIComponent(apiKey)}`
-                              + `&service=${serviceId}`
-                              + `&quantity=${quantity}`;
-
-                const checkRes = await axios.get(checkUrl, { timeout: 10000 });
-                const checkData = checkRes.data;
-
-                if (!checkData || checkData.status !== "success") {
-                    return res.json({ status: "error", message: checkData?.message || "Not enough balance or Invalid Key" });
+                // BotsBusiness Webhook-এ পয়েন্ট চেক ও ডিডাকশন
+                const checkRes = await axios.get(`${BOT_WEBHOOK_URL}&key=${encodeURIComponent(apiKey)}&action=add&service=${serviceId}&quantity=${quantity}`);
+                
+                if (!checkRes.data || checkRes.data.status !== "success") {
+                    return res.json({ error: checkRes.data?.message || "Not enough balance or Invalid Key" });
                 }
 
-                // ২. SMMGen-এ অর্ডার পাঠানো
+                // মূল SMM Provider (SMMGen) এ অর্ডার পাঠানো
                 const providerRes = await callUpstreamApi('add', {
                     service: serviceId,
                     link: link,
@@ -111,38 +89,30 @@ app.all('/api/v2', async (req, res) => {
                 });
 
                 if (providerRes && providerRes.order) {
-                    return res.json({
-                        status: "success",
-                        order: providerRes.order,
-                        cost_points: checkData.cost,
-                        remaining_balance: checkData.remaining_balance
-                    });
+                    return res.json({ order: providerRes.order });
                 } else {
-                    return res.json({ 
-                        status: "error", 
-                        message: providerRes?.error || providerRes?.message || "Failed to place order on SMMGen" 
-                    });
+                    return res.json({ error: providerRes?.error || "Failed to place order upstream" });
                 }
 
             } catch (error) {
-                return res.json({ status: "error", message: "Transaction failed: " + error.message });
+                return res.json({ error: "Transaction failed: " + error.message });
             }
         }
 
-        // 🔍 4. ORDER STATUS
+        // 🔍 ৩. অর্ডার স্ট্যাটাস (action=status)
         if (action === "status") {
             const orderId = parseInt(request.order || 0, 10);
             if (isNaN(orderId) || orderId <= 0) {
-                return res.json({ status: "error", message: "Invalid Order ID" });
+                return res.json({ error: "Invalid Order ID" });
             }
             const statusRes = await callUpstreamApi('status', { order: orderId });
             return res.json(statusRes);
         }
 
-        return res.json({ status: "error", message: "Invalid Action" });
+        return res.json({ error: "Invalid Action" });
 
     } catch (globalErr) {
-        return res.json({ status: "error", message: "Internal Error: " + globalErr.message });
+        return res.json({ error: "Internal Error: " + globalErr.message });
     }
 });
 
