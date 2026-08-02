@@ -6,9 +6,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const SMM_API_URL = "https://my.smmgen.com/api/v2";
-const SMM_API_KEY = "2e53b57414dc722db3e2e2f9aaf723dc";
+// 🔑 আপনার নতুন আপডেট করা SMMGen API Key
+const SMM_API_KEY = "29e3cdfcbdce836e667f5c6473e6fb3f";
 
-// 🔗 আপনার সুনির্দিষ্ট BotsBusiness Webhook URL
+// 🔗 আপনার BotsBusiness Webhook URL
 const BOT_WEBHOOK_URL = "https://api.bots.business/v1/bots/2968405/new-webhook?command=%2Fon_api_request&public_user_token=6f943e36950e8fe78a3dff7524d9e521";
 
 async function callUpstreamApi(action, params = {}) {
@@ -31,7 +32,10 @@ async function callUpstreamApi(action, params = {}) {
 
         return res.data || { error: "Empty response from provider" };
     } catch (err) {
-        return { error: err.response?.data?.error || err.message };
+        if (err.response) {
+            return { error: `Provider Error (${err.response.status}): ${JSON.stringify(err.response.data)}` };
+        }
+        return { error: err.message };
     }
 }
 
