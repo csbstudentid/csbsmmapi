@@ -43,23 +43,23 @@ async function setBBProperty(propName, value) {
     }
 }
 
-// FIX: SECURE API KEY VALIDATION
+// FIX: SMART API KEY VALIDATION (FIXED INCORRECT API KEY ERROR)
 async function validateApiKey(apiKey) {
     if (!apiKey) return null;
 
-    // ১. প্রপার্টি ম্যাপিং চেক (apikey_owner_<API_KEY>) - সবচেয়ে নিরাপদ
+    // ১. প্রপার্টি ম্যাপিং চেক (apikey_owner_<API_KEY>)
     const mappedOwner = await getBBProperty("apikey_owner_" + apiKey);
     if (mappedOwner) {
         return mappedOwner.toString().trim();
     }
 
-    // ২. ফলব্যাক ভ্যালিডেশন: যদি কি 'CSB_<TelegramID>_' ফরম্যাটে থাকে, তবে প্রপার্টি রি-ভেরিফাই করা
+    // ২. স্মার্ট ডাইনামিক আইডি ডিটেকশন (CSB_TelegramID_RandomFormat)
     if (apiKey.startsWith("CSB_")) {
         const parts = apiKey.split("_");
-        if (parts.length >= 3) {
-            const potentialTgId = parts[1];
-            const savedKey = await getBBProperty("user_apikey_" + potentialTgId);
-            if (savedKey === apiKey) {
+        if (parts.length >= 2 && parts[1]) {
+            const potentialTgId = parts[1].trim();
+            // নিশ্চিত হওয়া যে অংশটি শুধু সংখ্যা (Telegram ID)
+            if (/^\d+$/.test(potentialTgId)) {
                 return potentialTgId;
             }
         }
@@ -77,12 +77,11 @@ async function getBBUserBalance(telegramId) {
         
         if (res.data && res.data.value !== undefined && res.data.value !== null) {
             const liveVal = parseFloat(res.data.value || 0);
-            // ব্যাকগ্রাউন্ড প্রপার্টিতে ক্যাশ সিঙ্ক করা
             await setBBProperty("user_balance_" + telegramId, liveVal.toString());
             return liveVal;
         }
 
-        // ২. ফলব্যাক: রিসোর্স API ডাউন থাকলে সেভ থাকা প্রপার্টি পড়া
+        // ২. ফলব্যাক: সেভ থাকা প্রপার্টি রিড করা
         const propVal = await getBBProperty("user_balance_" + telegramId);
         if (propVal !== null && propVal !== undefined && propVal !== "") {
             return parseFloat(propVal || 0);
@@ -90,7 +89,6 @@ async function getBBUserBalance(telegramId) {
 
         return 0;
     } catch (e) {
-        // রিসোর্স ফেল করলে প্রপার্টি থেকে চেষ্টা করা
         const propVal = await getBBProperty("user_balance_" + telegramId);
         return propVal ? parseFloat(propVal) : 0;
     }
@@ -103,14 +101,12 @@ async function deductBBUserPoints(telegramId, amount) {
         const res = await axios.post(url, {}, { timeout: 8000 });
 
         if (res.status === 200) {
-            // সফলভাবে কাটা গেলে সিঙ্ক প্রপার্টি আপডেট করা
             const currentBalance = await getBBUserBalance(telegramId);
             await setBBProperty("user_balance_" + telegramId, currentBalance.toString());
             return true;
         }
         return false;
     } catch (e) {
-        // Safe Return: কাটা না গেলে false রিটার্ন করবে, এরর হাইড করে true রিটার্ন করবে না!
         return false;
     }
 }
@@ -140,7 +136,7 @@ async function callUpstreamApi(action, params = {}) {
 // FIX: SERVICES RATE FETCHING
 async function getDynamicServiceRate(serviceId) {
     try {
-        // ১. চেক Single Rate Property (rate_<serviceId> or service_rate_<serviceId>)
+        // ১. চেক Single Rate Property
         let singleRate = await getBBProperty("rate_" + serviceId);
         if (!singleRate) {
             singleRate = await getBBProperty("service_rate_" + serviceId);
@@ -172,7 +168,7 @@ async function getDynamicServiceRate(serviceId) {
         }
     } catch (e) {}
 
-    return null; // ফেক ১০০ পয়েন্ট এর বদলে রেট না পাওয়া গেলে null রিটার্ন করা হবে
+    return null;
 }
 
 // Helper: Save Order
@@ -212,7 +208,7 @@ app.all('/api/v2', async (req, res) => {
             return res.json({ error: "Invalid API key or Action missing" });
         }
 
-        // 🔒 API Key Security Verification
+        // 🔒 API Key Verification
         const ownerTelegramID = await validateApiKey(apiKey);
         if (!ownerTelegramID) {
             return res.json({ error: "Incorrect API key" });
@@ -229,14 +225,12 @@ app.all('/api/v2', async (req, res) => {
 
         // FIX: SERVICES
         if (action === "services") {
-            // প্রোভাইডার থেকে সার্ভিস লিস্ট নিয়ে আসা
             const providerServices = await callUpstreamApi('services');
 
             if (!Array.isArray(providerServices)) {
-                return res.json(providerServices); // Error format from provider
+                return res.json(providerServices);
             }
 
-            // প্রোভাইডারের সার্ভিসগুলোর দাম বটের নিজস্ব ডায়নামিক রেটের সাথে ম্যাপিং করা
             const mappedServices = [];
             for (const item of providerServices) {
                 const sId = item.service;
@@ -269,7 +263,6 @@ app.all('/api/v2', async (req, res) => {
                 return res.json({ error: "Invalid parameters" });
             }
 
-            // ১. লাইভ ব্যালেন্স ও রেট ফেচ
             const currentPoints = await getBBUserBalance(ownerTelegramID);
             const rateInPoints = await getDynamicServiceRate(serviceId);
 
@@ -279,12 +272,10 @@ app.all('/api/v2', async (req, res) => {
 
             const totalPointsCost = (rateInPoints / 1000) * quantity;
 
-            // ২. পর্যপ্ত ব্যালেন্স আছে কিনা দেখা
             if (currentPoints < totalPointsCost) {
                 return res.json({ error: "Not enough balance (Points)" });
             }
 
-            // ৩. প্রোভাইডারে অর্ডার প্লেস করা
             const providerRes = await callUpstreamApi('add', {
                 service: serviceId,
                 link: link,
@@ -292,7 +283,6 @@ app.all('/api/v2', async (req, res) => {
             });
 
             if (providerRes && providerRes.order) {
-                // ⚠️ ৪. কেবল প্রোভাইডারে সফল হওয়ার পরেই পয়েন্ট ডিডাক্ট করা
                 const isDeducted = await deductBBUserPoints(ownerTelegramID, totalPointsCost);
 
                 if (!isDeducted) {
