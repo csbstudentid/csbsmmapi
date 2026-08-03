@@ -14,13 +14,18 @@ const SMM_API_KEY = process.env.SMM_API_KEY || "29e3cdfcbdce836e667f5c6473e6fb3f
 const BB_BOT_ID = process.env.BB_BOT_ID || "2968405";
 const BB_API_KEY = process.env.BB_API_KEY || "SZ5agaaNJX1kWJiaoK7BK3Aqm-1PJ9WtrkNdGv7n";
 
-// Helper: Read BotsBusiness Property
+// Helper: Read BotsBusiness Property (Fixed & Safe)
 async function getBBProperty(propName) {
     try {
         const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/properties?api_key=${BB_API_KEY}&name=${encodeURIComponent(propName)}`;
         const res = await axios.get(url, { timeout: 8000 });
-        if (res.data && res.data.value !== undefined && res.data.value !== null) {
-            return res.data.value;
+        if (res.data) {
+            if (res.data.value !== undefined && res.data.value !== null) {
+                return res.data.value;
+            }
+            if (typeof res.data === 'string') {
+                return res.data;
+            }
         }
         return null;
     } catch (e) {
@@ -53,34 +58,34 @@ function extractTelegramIdFromKey(apiKey) {
     return null;
 }
 
-// FIX: FETCH REAL LIVE BALANCE DIRECTLY FROM BOTS.BUSINESS (UPDATED)
+// FIX: FETCH REAL LIVE BALANCE DIRECTLY (ULTIMATE FIX)
 async function getBBUserBalance(telegramId) {
     try {
-        // 1. সরাসরি প্রপার্টি চেক করা (যা বট থেকে আপডেট করা হয়)
+        // ১. প্রথমে প্রপার্টি চেক করা
         const propVal = await getBBProperty("user_balance_" + telegramId);
         if (propVal !== null && propVal !== undefined && propVal !== "" && !isNaN(propVal)) {
             return parseFloat(propVal);
         }
 
-        // 2. প্রপার্টি না থাকলে সরাসরি Bots.Business রিসোর্স API থেকে ফেচ করা
+        // ২. প্রপার্টি না পেলে সরাসরি রিসোর্স এপিআই কল করা
         const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
         const res = await axios.get(url, { timeout: 8000 });
         
         if (res.data) {
             if (Array.isArray(res.data)) {
-                const balRes = res.data.find(r => r.name === "balance");
+                const balRes = res.data.find(r => r.name === "balance" || r.resource === "balance");
                 if (balRes && balRes.value !== undefined) {
                     return parseFloat(balRes.value || 0);
                 }
-            } else if (res.data.balance !== undefined) {
-                return parseFloat(res.data.balance || 0);
+            } else if (typeof res.data === 'object') {
+                if (res.data.balance !== undefined) return parseFloat(res.data.balance);
+                if (res.data.value !== undefined) return parseFloat(res.data.value);
             }
         }
 
         return 0;
     } catch (e) {
-        const fallbackVal = await getBBProperty("user_balance_" + telegramId);
-        return fallbackVal ? parseFloat(fallbackVal) : 0;
+        return 0;
     }
 }
 
@@ -122,15 +127,33 @@ async function callUpstreamApi(action, params = {}) {
     }
 }
 
-// FIX: SERVICES RATE FETCHING
+// FIX: SERVICES RATE FETCHING (UPDATED & SECURE)
 async function getDynamicServiceRate(serviceId) {
     try {
+        // ১. প্রথমে সরাসরি নির্দিষ্ট সার্ভিসের রেট চেক করা
         let singleRate = await getBBProperty("rate_" + serviceId);
         if (!singleRate) {
             singleRate = await getBBProperty("service_rate_" + serviceId);
         }
         if (singleRate) return parseFloat(singleRate);
 
+        // ২. বটের ফুল ক্যাটালগ প্রপার্টি থেকে সার্ভিস খুঁজে বের করা
+        const rawCatalog = await getBBProperty("bot_full_catalog");
+        if (rawCatalog) {
+            let catalog = typeof rawCatalog === 'string' ? JSON.parse(rawCatalog) : rawCatalog;
+            for (let cat in catalog) {
+                let list = catalog[cat];
+                if (Array.isArray(list)) {
+                    let match = list.find(s => String(s.id) === String(serviceId) || String(s.service_id) === String(serviceId));
+                    if (match) {
+                        let r = match.rate || match.reseller_rate || match.price;
+                        if (r) return parseFloat(r);
+                    }
+                }
+            }
+        }
+
+        // ৩. অন্যান্য কনফিগ বা লিস্ট চেক করা
         const rawConfigs = await getBBProperty("service_configs");
         if (rawConfigs) {
             let configs = typeof rawConfigs === 'string' ? JSON.parse(rawConfigs) : rawConfigs;
@@ -138,18 +161,6 @@ async function getDynamicServiceRate(serviceId) {
                 let sObj = configs[serviceId];
                 let r = sObj.rate || sObj.point || sObj.price;
                 if (r) return parseFloat(r);
-            }
-        }
-
-        const rawList = await getBBProperty("services_list");
-        if (rawList) {
-            let list = typeof rawList === 'string' ? JSON.parse(rawList) : rawList;
-            if (Array.isArray(list)) {
-                let match = list.find(s => s.id == serviceId || s.service_id == serviceId || s.service == serviceId);
-                if (match) {
-                    let r = match.rate || match.point || match.price;
-                    if (r) return parseFloat(r);
-                }
             }
         }
     } catch (e) {}
