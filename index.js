@@ -53,28 +53,34 @@ function extractTelegramIdFromKey(apiKey) {
     return null;
 }
 
-// FIX: FETCH REAL LIVE BALANCE DIRECTLY FROM BOTS.BUSINESS
+// FIX: FETCH REAL LIVE BALANCE DIRECTLY FROM BOTS.BUSINESS (UPDATED)
 async function getBBUserBalance(telegramId) {
     try {
-        // 1. First Priority: Check property saved by Bot
+        // 1. সরাসরি প্রপার্টি চেক করা (যা বট থেকে আপডেট করা হয়)
         const propVal = await getBBProperty("user_balance_" + telegramId);
-        if (propVal !== null && propVal !== undefined && propVal !== "") {
-            return parseFloat(propVal || 0);
+        if (propVal !== null && propVal !== undefined && propVal !== "" && !isNaN(propVal)) {
+            return parseFloat(propVal);
         }
 
-        // 2. Second Priority: Read from user_info or resources
-        const res = await axios.get(`https://api.bots.business/v1/bots/${BB_BOT_ID}/resources?api_key=${BB_API_KEY}&telegram_id=${telegramId}`, { timeout: 8000 });
-        if (res.data && Array.isArray(res.data)) {
-            const balRes = res.data.find(r => r.name === "balance");
-            if (balRes && balRes.value !== undefined) {
-                return parseFloat(balRes.value || 0);
+        // 2. প্রপার্টি না থাকলে সরাসরি Bots.Business রিসোর্স API থেকে ফেচ করা
+        const url = `https://api.bots.business/v1/bots/${BB_BOT_ID}/resources?api_key=${BB_API_KEY}&telegram_id=${telegramId}`;
+        const res = await axios.get(url, { timeout: 8000 });
+        
+        if (res.data) {
+            if (Array.isArray(res.data)) {
+                const balRes = res.data.find(r => r.name === "balance");
+                if (balRes && balRes.value !== undefined) {
+                    return parseFloat(balRes.value || 0);
+                }
+            } else if (res.data.balance !== undefined) {
+                return parseFloat(res.data.balance || 0);
             }
         }
 
         return 0;
     } catch (e) {
-        const propVal = await getBBProperty("user_balance_" + telegramId);
-        return propVal ? parseFloat(propVal) : 0;
+        const fallbackVal = await getBBProperty("user_balance_" + telegramId);
+        return fallbackVal ? parseFloat(fallbackVal) : 0;
     }
 }
 
