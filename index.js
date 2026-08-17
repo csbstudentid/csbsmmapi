@@ -21,16 +21,16 @@ export default async function handler(req, res) {
     const queryString = new URLSearchParams(queryParams).toString();
     const targetUrl = `https://api.bots.business/v1/bots/${BOT_ID}/new-webhook?${queryString}`;
 
-    const response = await fetch(targetUrl);
-    const textData = await response.text();
+    const bbResponse = await fetch(targetUrl);
+    const textData = await bbResponse.text();
 
     try {
-      const json = JSON.parse(textData);
-      return res.status(200).json(json);
+      const jsonData = JSON.parse(textData);
+      return res.status(200).json(jsonData);
     } catch (e) {
       return res.status(200).send(textData);
     }
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: "Gateway Error: " + error.message });
   }
 }
